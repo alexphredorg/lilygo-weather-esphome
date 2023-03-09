@@ -1,5 +1,5 @@
 # lilygo-weather-esphome
-!Weather display for a LilyGo T-Display-S3 using ESPHome
+## Weather display for a LilyGo T-Display-S3 using ESPHome
 
 Tested on ESPHome 2023.2.4 and LilyGo T-Display-S3 (no touch)
 
