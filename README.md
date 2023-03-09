@@ -15,8 +15,8 @@ Installation:
 * update ESPHome device passwords with unique ones for your installation
 
 Demonstrates the following techniques:
-* TFT_ESPi library for accessing the screen
-* TrueType fonts
+* TFT_ESPi library for drawing on the screen, using double buffering to make it flicker-free
+* Scaling TrueType fonts using OpenFontRender
 * Bitmap fonts (used for the small monocolor weather graphics)
-* 5/6/5 sprites (for the larger multicolor weather graphics)
+* Loading and displaying 5/6/5 color sprites (for the larger multicolor weather graphics)
 * ESP-side JSON parsing of data coming from Home Assistant
