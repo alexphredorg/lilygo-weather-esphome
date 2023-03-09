@@ -1,0 +1,347 @@
+# borrowed heavily from
+# https://github.com/rperciaccante/MopekaLCDDisplay
+# and https://github.com/landonr/lilygo-tdisplays3-esphome
+
+esphome:
+  name: lilygo-weather-display
+  friendly_name: lilygo-weather-display
+
+  includes:
+    - tdisplays3/tft_espi_display.h
+    - tdisplays3/WeatherState.h
+    - tdisplays3/WeatherIcons.h
+    - tdisplays3/WeatherFont.h
+    - tdisplays3/ImpactClock_ttf.h
+    - tdisplays3/SegoeDisplay_ttf.h
+
+  libraries:
+    - SPI
+    - FS
+    - SPIFFS
+    - tdisplays3=https://github.com/landonr/lilygo-tdisplays3-esphome.git
+    - OpenFontRender=https://github.com/Bodmer/OpenFontRender.git
+
+# import the json library
+json:
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+# pull time from Home Assistant
+time:
+  - platform: homeassistant
+    id: esptime
+
+interval:
+  interval: 15s
+  then:
+    script.execute: update_screen
+
+text_sensor:
+  # met.no hourly weather forecast, which we parse immediately into the weatherForecastHourly object
+  - platform: homeassistant
+    id: hourlyForecast
+    name: Hourly Forecast
+    entity_id: weather.home_hourly
+    attribute: forecast
+    filters:
+    - to_lower
+    on_value:
+      then:
+      - lambda: |-
+          DynamicJsonDocument doc(16384);
+          std::istringstream st(x);
+          auto error = deserializeJson(doc, st /* updated value */);
+          if (!error) {
+            JsonArray array = doc.as<JsonArray>();
+            int i = 0;
+            time_t t = std::time(NULL);
+            struct tm *ts = localtime(&t);
+            int hour = ts->tm_hour;
+            for(JsonVariant v : array) {
+              JsonObject obj = v.as<JsonObject>();
+              if (i >= FORECAST_HOURS) break;
+              weatherForecastHourly[i].temp = obj["temperature"].as<int>();
+              weatherForecastHourly[i].precip = obj["precipitation"].as<float>();
+              weatherForecastHourly[i].condition = obj["condition"].as<std::string>();
+              weatherForecastHourly[i].hour = 1 + ((hour + i) % 12);
+              weatherForecastHourly[i].valid = true;
+              ESP_LOGD("lilygo", "%i: %i %i %f %s %s", i, hour, weatherForecastHourly[i].temp, weatherForecastHourly[i].precip, weatherForecastHourly[i].condition.c_str(), obj["datetime"].as<std::string>().c_str());
+              i++;
+            }
+          }
+          else
+          {
+            ESP_LOGW("lilygo", "deserializeJson returned %s", error.c_str());
+            char next[100];
+            st.seekg(-20, st.cur);
+            st.getline(next, 100);
+            ESP_LOGW("lilygo", "error in 20 chars: %s", next);
+          }
+  
+  # accuweather weekly weather forecast, which we parse immediately into the weatherForecastDaily object
+  - platform: homeassistant
+    id: dailyForecast
+    name: Daily Forecast
+    entity_id: weather.home
+    attribute: forecast
+    filters:
+    - to_lower
+    on_value:
+      then:
+      - lambda: |-
+          // parse weather from AccuWeather
+          DynamicJsonDocument doc(16384);
+          std::istringstream st(x);
+          auto error = deserializeJson(doc, st /* updated value */);
+          if (!error) {
+            JsonArray array = doc.as<JsonArray>();
+            int i = 0;
+            time_t t = std::time(NULL);
+            struct tm *ts = localtime(&t);
+            int wday = ts->tm_wday;
+            for(JsonVariant v : array) {
+              JsonObject obj = v.as<JsonObject>();
+              if (i >= FORECAST_DAYS) break;
+              weatherForecastDaily[i].temp_low = obj["templow"].as<int>();
+              weatherForecastDaily[i].temp_high = obj["temperature"].as<int>();
+              weatherForecastDaily[i].precip_probability = obj["precipitation_probability"].as<float>();
+              weatherForecastDaily[i].condition = obj["condition"].as<std::string>();
+              weatherForecastDaily[i].valid = true;
+              // this hack assumes that the first forecast is for today, and they increment one per day
+              // that isn't true for all forecast arrays on HomeAssistant, but works for AccuWeather
+              switch ((wday + i) % 7)
+              {
+                case 0:  weatherForecastDaily[i].day = "Sun"; break;
+                case 1:  weatherForecastDaily[i].day = "Mon"; break;
+                case 2:  weatherForecastDaily[i].day = "Tue"; break;
+                case 3:  weatherForecastDaily[i].day = "Wed"; break;
+                case 4:  weatherForecastDaily[i].day = "Thu"; break;
+                case 5:  weatherForecastDaily[i].day = "Fri"; break;
+                case 6:  weatherForecastDaily[i].day = "Sat"; break;
+                default: weatherForecastDaily[i].day = "???"; break;
+              }
+              ESP_LOGD("lilygo", "%i: %i->%i %i %s, %s", i, weatherForecastDaily[i].temp_low, weatherForecastDaily[i].temp_high, weatherForecastDaily[i].precip_probability, weatherForecastDaily[i].day.c_str(), weatherForecastDaily[i].condition.c_str());
+              i++;
+            }
+          }
+          else
+          {
+            ESP_LOGW("lilygo", "deserializeJson returned %s", error.c_str());
+            char next[100];
+            st.seekg(-20, st.cur);
+            st.getline(next, 100);
+            ESP_LOGW("lilygo", "error in 20 chars: %s", next);
+          }
+      - script.execute: update_screen
+  
+  # current conditions
+  - platform: homeassistant
+    id: condition
+    name: Current Conditions
+    entity_id: weather.home
+
+  # temperature
+  - platform: homeassistant
+    id: temperature
+    name: Current Temperature
+    entity_id: weather.home
+    attribute: temperature
+
+# 170 x 320 pixel screen
+# we draw everything to a sprite, then load the sprite to make it flicker free
+script:
+  id: update_screen
+  then:
+  - lambda: |-
+      std::string weatherIcon;
+      int iconColor;
+      
+      // clear screen
+      display->clearSprite(TFT_BLACK);
+
+      if (!showHourly)
+      {
+        // load the big font that we use for time and temp
+        display->render.unloadFont();
+        if (display->render.loadFont(ImpactClock, sizeof(ImpactClock)))
+        {
+          ESP_LOGW("lilygo", "Font load error");
+        }
+
+        // draw the time up top
+        display->render.setFontSize(80);
+        std::string time = id(esptime).now().strftime("%I:%M");
+        display->render.cdrawString(time.c_str(), 160, 0, TFT_WHITE, TFT_BLACK);
+
+        // current conditions and 5 day forecast
+
+        // temp under the condition graphic (uses clock font)
+        std::string temp = id(temperature).state; // + "\u00b0";
+        display->render.setFontSize(32);
+        display->render.cdrawString((id(temperature).state + "\u00b0").c_str(), 32, 142, TFT_WHITE, TFT_BLACK);
+
+        // draw current conditions
+        // color graphical icon on top
+        int iconIndex = std::get<2>(weatherIconMap[id(condition).state]);
+        if (iconIndex > 0)
+        {
+          display->spr.pushImage(0, 72, 64, 64, epd_bitmap_allArray[iconIndex]);
+        }
+
+        // switch to thinner ui font
+        display->render.unloadFont();
+        if (display->render.loadFont(SegoeDisplay, sizeof(SegoeDisplay)))
+        {
+          ESP_LOGW("lilygo", "Font load error");
+        }
+
+        // daily forecast
+        int x = 90;
+        int y = 90;
+        display->render.setFontSize(20);
+        for (int i = 0; i < FORECAST_DAYS; i++)
+        {
+          if (weatherForecastDaily[i].valid)
+          {
+            // icon
+            std::string condition = weatherForecastDaily[i].condition;
+            weatherIcon = std::get<0>(weatherIconMap[weatherForecastDaily[i].condition]);
+            iconColor = std::get<1>(weatherIconMap[weatherForecastDaily[i].condition]);
+            // display->spr.setFreeFont(&Weathericon);
+            display->spr.setTextColor(iconColor);
+            display->spr.drawString(weatherIcon.c_str(), x, y);
+
+            // daily metrics
+            display->render.drawString(weatherForecastDaily[i].day.c_str(), x, y - 18, TFT_WHITE, TFT_BLACK);
+            display->render.drawString((std::to_string(weatherForecastDaily[i].temp_high) + "\u00b0").c_str(), x, y + 24, TFT_WHITE, TFT_BLACK);
+            display->render.drawString((std::to_string(weatherForecastDaily[i].temp_low) + "\u00b0").c_str(), x, y + 42, TFT_WHITE, TFT_BLACK);
+            display->render.drawString((std::to_string(weatherForecastDaily[i].precip_probability) + "%").c_str(), x, y + 60, TFT_SKYBLUE, TFT_BLACK);
+          }
+          x += 48;
+        }
+      }
+      else
+      {
+        // hourly forecast
+
+        // switch to thinner ui font
+        display->render.unloadFont();
+        if (display->render.loadFont(SegoeDisplay, sizeof(SegoeDisplay)))
+        {
+          ESP_LOGW("lilygo", "Font load error");
+        }
+
+        // hourly forecast
+        int x = 0;
+        int y = 18;
+        display->render.setFontSize(20);
+        for (int i = 0; i < FORECAST_HOURS; i++)
+        {
+          if (weatherForecastHourly[i].valid)
+          {
+            // icon
+            std::string condition = weatherForecastHourly[i].condition;
+            weatherIcon = std::get<0>(weatherIconMap[weatherForecastHourly[i].condition]);
+            iconColor = std::get<1>(weatherIconMap[weatherForecastHourly[i].condition]);
+            display->spr.setTextColor(iconColor);
+            display->spr.drawString(weatherIcon.c_str(), x, y);
+
+            // hourly metrics
+            display->render.drawString((std::to_string(weatherForecastHourly[i].hour) + ":00").c_str(), x, y - 18, TFT_WHITE, TFT_BLACK);
+            display->render.drawString((std::to_string(weatherForecastHourly[i].temp) + "\u00b0").c_str(), x, y + 24, TFT_WHITE, TFT_BLACK);
+            char precip[16];
+            snprintf(precip, 16, "%1.2f\"", weatherForecastHourly[i].precip);
+            display->render.drawString(precip, x, y + 42, TFT_SKYBLUE, TFT_BLACK);
+          }
+          x += 50;
+          if (x >= 300)
+          {
+            x = 0;
+            y += 85;
+          }
+
+        }
+      }
+
+      // push buffer to display
+      display->spr.pushSprite(0, 0);
+    
+
+# This turns on screen backlight
+switch:
+  - platform: gpio
+    pin: GPIO38
+    name: "Backlight"
+    id: backlight
+    internal: True
+    restore_mode: RESTORE_DEFAULT_ON
+
+# this is the "key" button
+binary_sensor:
+  - platform: gpio
+    pin: GPIO14
+    name: "Key Button"
+    id: key_button
+    internal: True
+    filters:
+    - invert:
+    on_press:
+      then:
+      - logger.log: "button click"
+      - lambda: |-
+          showHourly = true;
+      - script.execute: update_screen
+      - delay: 15s
+      - lambda: |-
+          showHourly = false;
+      - script.execute: update_screen
+    
+
+# initialize the display functions
+custom_component:
+    lambda: |-
+        App.register_component(display);
+        display->setup();
+        display->tft.setRotation(3);
+        display->spr.setFreeFont(&Weathericon);
+        // open font render (truetype)
+        if (display->render.loadFont(ImpactClock, sizeof(ImpactClock)))
+        {
+          ESP_LOGW("lilygo", "Font load error");
+        }
+        return {display};
+    id: displayComponent
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "KEY"
+
+#mqtt:
+#  discovery: false
+#  broker: homeassistant.local
+#  username: !secret mqtt_user
+#  password: !secret mqtt_password
+
+
+ota:
+  password: "PASSWORD"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Lilygo-Weather-Display Fallback Hotspot"
+    password: "WIFIPASS"
+
+captive_portal:
+    
