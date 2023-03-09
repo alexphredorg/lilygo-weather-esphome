@@ -1,6 +1,8 @@
 # lilygo-weather-esphome
 ## Weather display for a LilyGo T-Display-S3 using ESPHome
 
+![](ScreenShot.png)
+
 Tested on ESPHome 2023.2.4 and LilyGo T-Display-S3 (no touch)
 
 Retrieves data from Home Assistant using the AccuWeather forecast (for daily) and Met.No forecast (for hourly).
