@@ -1,0 +1,343 @@
+# Thanks to https://github.com/landonr/lilygo-tdisplays3-esphome for making the
+# LilyGo display work
+#
+# This is a demonstration weather display that shows today's weather and the 
+# 5 day forecast as well as a clock
+
+esphome:
+  name: lilygo-weather-display
+  friendly_name: lilygo-weather-display
+
+  includes:
+    - weather/WeatherState.h
+
+  libraries:
+    - SPI
+    - FS
+    - SPIFFS
+    - OpenFontRender=https://github.com/Bodmer/OpenFontRender.git
+
+  platformio_options:
+    build_flags: 
+      - "-D FORECAST_DAYS=5"
+
+external_components:
+  - source: github://landonr/lilygo-tdisplays3-esphome
+    components: [tdisplays3]
+
+# import the json library
+json:
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+# pull time from Home Assistant
+time:
+  - platform: homeassistant
+    id: esptime
+
+text_sensor:
+  # current conditions
+  - platform: homeassistant
+    id: condition
+    name: Current Conditions
+    entity_id: weather.home_1411_2
+
+  # temperature
+  - platform: homeassistant
+    id: temperature
+    name: Current Temperature
+    entity_id: weather.home_1411_2
+    attribute: temperature
+
+  # met.no hourly weather forecast, which we parse immediately into the weatherForecastHourly object
+  - platform: homeassistant
+    id: hourlyForecast
+    name: Hourly Forecast
+    entity_id: weather.home_hourly
+    attribute: forecast
+    filters:
+    - to_lower
+    on_value:
+      then:
+      - lambda: |-
+          parseHourlyForecast(x);
+      - script.execute: all_data_received
+
+  # accuweather weekly weather forecast, which we parse immediately into the weatherForecastDaily object
+  - platform: homeassistant
+    id: dailyForecast
+    name: Daily Forecast
+    entity_id: weather.home_1411_2
+    attribute: forecast
+    filters:
+    - to_lower
+    on_value:
+      then:
+      - lambda: |-
+          parseDailyForecast(x);
+      - script.execute: all_data_received
+
+script:
+  - id: all_data_received
+    then:
+      - component.update: disp
+  
+font:
+  - file:
+      type: gfonts
+      family: Open Sans
+      weight: 700    
+    id: font_clock
+    glyphs: "0123456789:"
+    size: 70
+  - file:
+      type: gfonts
+      family: Open Sans
+      weight: 700    
+    id: font_clock_big
+    glyphs: "0123456789:"
+    size: 100
+  - file: "gfonts://Roboto"
+    id: font_temp
+    size: 28
+  - file:
+      type: gfonts
+      family: Open Sans
+      weight: 500    
+    id: font_small
+    size: 30
+    glyphs: "!\"%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz→»"
+  - file:
+      type: gfonts
+      family: Open Sans
+      weight: 500    
+    id: font_medium
+    size: 45
+    glyphs: "!\"%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz→»"
+  - file:
+      type: gfonts
+      family: Open Sans
+      weight: 300    
+    id: font_xsmall
+    size: 16  
+    glyphs: "!\"%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz→»"
+  - file: 
+      type: gfonts
+      family: Material Symbols Sharp
+      weight: 400
+    id: font_weather_icons_xsmall
+    size: 20
+    glyphs:
+      - "\U0000F159" # clear-night
+      - "\U0000F15B" # cloudy
+      - "\U0000F172" # partlycloudy
+      - "\U0000E818" # fog      
+      - "\U0000F67F" # hail
+      - "\U0000EBDB" # lightning, lightning-rainy
+      - "\U0000F61F" # pouring
+      - "\U0000F61E" # rainy
+      - "\U0000F61C" # snowy
+      - "\U0000F61D" # snowy-rainy
+      - "\U0000E81A" # sunny
+      - "\U0000EFD8" # windy, windy-variant
+      - "\U0000F7F3" # exceptional
+  - file: 
+      type: gfonts
+      family: Material Symbols Sharp
+      weight: 400
+    id: font_weather_icons_small
+    size: 32
+    glyphs:
+      - "\U0000F159" # clear-night
+      - "\U0000F15B" # cloudy
+      - "\U0000F172" # partlycloudy
+      - "\U0000E818" # fog      
+      - "\U0000F67F" # hail
+      - "\U0000EBDB" # lightning, lightning-rainy
+      - "\U0000F61F" # pouring
+      - "\U0000F61E" # rainy
+      - "\U0000F61C" # snowy
+      - "\U0000F61D" # snowy-rainy
+      - "\U0000E81A" # sunny
+      - "\U0000EFD8" # windy, windy-variant
+      - "\U0000F7F3" # exceptional
+
+color:
+  - id: color_light_grey
+    hex: BBBBBB   
+  - id: color_dark_grey
+    hex: 5F5F5F
+  - id: color_white
+    hex: FFFFFF   
+  - id: color_red
+    hex: FF0000
+  - id: color_green
+    hex: 00FF00
+  - id: color_yellow
+    hex: FFFF00
+
+image:
+  - file: "weather/clear-night.png"
+    id: icon_clear_night
+    type: RGB24
+  - file: "weather/cloudy.png"
+    id: icon_cloudy
+    type: RGB24
+  - file: "weather/fog.png"
+    id: icon_fog
+    type: RGB24
+  - file: "weather/lightning.png"
+    id: icon_lightning
+    type: RGB24
+  - file: "weather/partlycloudy.png"
+    id: icon_partlycloudy
+    type: RGB24
+  - file: "weather/pouring.png"
+    id: icon_pouring
+    type: RGB24
+  - file: "weather/rainy.png"
+    id: icon_rainy
+    type: RGB24
+  - file: "weather/snowy-rainy.png"
+    id: icon_snowy_rainy
+    type: RGB24
+  - file: "weather/snowy.png"
+    id: icon_snowy
+    type: RGB24
+  - file: "weather/sunny.png"
+    id: icon_sunny
+    type: RGB24
+  - file: "weather/windy.png"
+    id: icon_windy
+    type: RGB24
+
+# 320 x 170 pixels
+display:
+  - platform: tdisplays3
+    id: disp
+    rotation: 270
+    pages:
+      - id: weather
+        lambda: |-
+          // clear screen
+          it.clear();
+
+          // draw the time up top
+          std::string time = id(esptime).now().strftime("%I:%M");
+          std::string dayofweek = id(esptime).now().strftime("%a %d");
+          it.print(220, 35, id(font_clock), id(color_white), TextAlign::CENTER, time.c_str());
+          it.print(0, 0, id(font_small), id(color_light_grey), TextAlign::TOP_LEFT, dayofweek.c_str());
+
+          // bitmap icon for today's forecast
+          std::string condition = weatherForecastDaily[0].condition;
+          Image *image = NULL;
+          // I don't like this string based lookup, but id() is weird
+          // in esphome and doesn't work in header files so I couldn't 
+          // build a map
+          if (condition == "clear-night") image = id(icon_clear_night);
+          else if (condition == "cloudy") image = id(icon_cloudy);
+          else if (condition == "partlycloudy") image = id(icon_partlycloudy);
+          else if (condition == "fog") image = id(icon_fog);
+          else if (condition == "hail") image = id(icon_rainy);
+          else if (condition == "lightning") image = id(icon_lightning);
+          else if (condition == "lightning-rainy") image = id(icon_lightning);
+          else if (condition == "pouring") image = id(icon_pouring);
+          else if (condition == "rainy") image = id(icon_rainy);
+          else if (condition == "snowy") image = id(icon_snowy);
+          else if (condition == "snowy-rainy") image = id(icon_snowy_rainy);
+          else if (condition == "sunny") image = id(icon_sunny);
+          else if (condition == "windy") image = id(icon_windy);
+          if (image != NULL)
+          {
+            it.image(0, 38, image);
+          }
+
+          // today's forecast
+          it.printf(
+            0, 96, id(font_small), id(color_light_grey), TextAlign::TOP_LEFT, 
+            "%i°»%i°", weatherForecastDaily[0].temp_low, weatherForecastDaily[0].temp_high);
+          it.printf(
+            0, 132, id(font_small), id(color_light_grey), TextAlign::TOP_LEFT, 
+            "Pr: %i%%", weatherForecastDaily[0].precip_probability);
+          it.printf(
+            64, 64, id(font_small), id(color_light_grey), TextAlign::CENTER_LEFT, 
+            "%s°", id(temperature).state.c_str());
+          
+
+          // daily forecast
+          int x = 128;
+          int y = 72;
+          int row_height = 18;
+          for (int i = 1; i < FORECAST_DAYS; i++)
+          {
+            if (weatherForecastDaily[i].valid)
+            {
+              // icon
+              std::string condition = weatherForecastDaily[i].condition;
+              std::string icon = weatherIconMapString[condition];
+              Color color = weatherIconMapColor[condition];
+
+              //ESP_LOGD("lilygo", "condition: %s icon: %s", condition.c_str(), icon.c_str());
+
+              it.print(x, y + (0 * row_height), id(font_xsmall), id(color_light_grey), TextAlign::TOP_LEFT, weatherForecastDaily[i].day.c_str());
+              it.print(x, y + (1 * row_height) + (row_height / 15), id(font_weather_icons_xsmall), color, TextAlign::TOP_LEFT, icon.c_str());
+              it.printf(x, y + (2 * row_height), id(font_xsmall), id(color_light_grey), TextAlign::TOP_LEFT, "%i°", weatherForecastDaily[i].temp_high);
+              it.printf(x, y + (3 * row_height), id(font_xsmall), id(color_light_grey), TextAlign::TOP_LEFT, "%i°", weatherForecastDaily[i].temp_low);
+              if (weatherForecastDaily[i].precip_probability > 10)
+              {
+                it.printf(x, y + (4 * row_height), id(font_xsmall), id(color_light_grey), TextAlign::TOP_LEFT, "%i%%", weatherForecastDaily[i].precip_probability);
+              }
+            }
+            x += 48;
+          }
+
+# This turns on screen backlight
+switch:
+  - platform: gpio
+    pin: GPIO38
+    name: "Backlight"
+    id: backlight
+    internal: True
+    restore_mode: RESTORE_DEFAULT_ON
+
+# this is the "key" button
+binary_sensor:
+  - platform: gpio
+    pin: GPIO14
+    name: "Key Button"
+    id: key_button
+    internal: True
+    filters:
+    - invert:
+    on_press:
+      then:
+      - display.page.show_next: disp
+      - component.update: disp
+    
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "XXXXX"
+
+ota:
+  password: "XXXXXX"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Lilygo-Display Fallback Hotspot"
+    password: "XXXXXXX"
+
+captive_portal:
+    
